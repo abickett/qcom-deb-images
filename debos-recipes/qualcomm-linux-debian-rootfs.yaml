@@ -1,8 +1,14 @@
 {{- $xfcedesktop := or .xfcedesktop "false" }}
+{{- $desktop := or .desktop "none" }}
 {{- $localdebs := or .localdebs "none" }}
 {{- $aptlocalrepo := or .aptlocalrepo "none" }}
 {{- $kernelpackage := or .kernelpackage "linux-image-arm64" }}
 {{- $buildid := or .buildid "" }}
+
+{{- /* Backward compatibility: if xfcedesktop=true, set desktop=xfce */ -}}
+{{- if eq $xfcedesktop "true" }}
+  {{- $desktop = "xfce" }}
+{{- end }}
 
 architecture: arm64
 
@@ -174,7 +180,10 @@ actions:
       - i2c-tools
       - locales
       - mesa-opencl-icd
-      - mesa-utils-bin
+      - mesa-utils
+      - mesa-vulkan-drivers
+      - mesa-va-drivers
+      - mesa-vdpau-drivers
       # convenience networking commands (arp, ifconfig, route etc.)
       - net-tools
       - openssh-client
@@ -197,7 +206,7 @@ actions:
       set -eux
       usermod -a -G docker debian
 
-{{- if eq $xfcedesktop "true" }}
+{{- if eq $desktop "xfce" }}
   # this should ideally be task-xfce-desktop, but this pulls too many apps;
   # instead, curate from the Depends and Recommends of task-xfce-desktop and
   # task-desktop recursively; also, disable Recommends
@@ -230,22 +239,37 @@ actions:
       - fonts-symbola
       - avahi-daemon
       - libnss-mdns
-      # browser
-      - chromium
       # bluetooth settings
       - blueman
-      # audio: wireplumber for session integration, pipewire-pulse for chromium
-      # and xfce4-pulseaudio-plugin, and pavucontrol as referenced from the
-      # xfce pulse panel applet
+{{- else if eq $desktop "gnome" }}
+  # this should ideally be task-gnome-desktop, but this pulls too many apps;
+  # instead, use gnome-core which provides a minimal GNOME desktop with
+  # essential components only (includes GDM3 display manager)
+  - action: apt
+    description: Install GNOME desktop
+    recommends: true
+    packages:
+      - gnome-core
+{{- end }}
+
+{{- if ne $desktop "none" }}
+  - action: apt
+    description: Install common desktop packages
+    recommends: true
+    packages:
+      # browser
+      - chromium
+      # audio: wireplumber for session integration, pipewire-pulse for apps,
+      # and pavucontrol for audio control
       - pavucontrol
       - pipewire-pulse
       - wireplumber
       # camera: mostly supported through pipewire, but pull the qcam app
       # and cam CLI tool from libcamera-tools; also install libcamera
-      # gstreamer plugins for for gstreamer based apps; ideally, cam and
+      # gstreamer plugins for gstreamer based apps; ideally, cam and
       # qcam would be packaged separately as to allow pulling the CLI
       # version outside of the desktop list. libcamera-v4l2 provides a
-      # LD_PRELOAD library for compatiblity with apps relying on v4l2
+      # LD_PRELOAD library for compatibility with apps relying on v4l2
       # (similar to pipewire and pulse situation)
       - gstreamer1.0-libcamera
       - libcamera-tools
@@ -272,8 +296,8 @@ actions:
       touch /etc/buildinfo
       chmod 644 /etc/buildinfo
       echo "BUILD_ID={{$buildid}}" >>/etc/buildinfo
-{{- if eq $xfcedesktop "true" }}
-      echo "VARIANT_ID=xfce" >>/etc/buildinfo
+{{- if ne $desktop "none" }}
+      echo "VARIANT_ID={{$desktop}}" >>/etc/buildinfo
 {{- else }}
       echo "VARIANT_ID=console" >>/etc/buildinfo
 {{- end }}
