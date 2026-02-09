@@ -80,15 +80,40 @@ actions:
       grub-install --target=arm64-efi --efi-directory=/boot/efi \
           --bootloader-id=debian --recheck --no-floppy
       
-      # Configure GRUB defaults
-      cat >>/etc/default/grub <<'EOF'
-      # Qualcomm-specific kernel parameters
+      # Configure GRUB defaults using drop-in files (proper way, no core modifications)
+      mkdir -p /etc/default/grub.d
+      
+      # Create qcom-cmdline.cfg for easily customizable kernel parameters
+      cat >/etc/default/grub.d/qcom-cmdline.cfg <<'EOF'
+      # Qualcomm-specific kernel command line parameters
+      # This file is sourced by /etc/default/grub
+      #
+      # CUSTOMIZE THIS FILE to add board-specific or debugging parameters
+      # After editing, run: sudo update-grub
+      #
+      # Required Qualcomm parameters (DO NOT REMOVE):
+      #   clk_ignore_unused          - Prevents disabling unused clocks
+      #   pd_ignore_unused           - Prevents disabling unused power domains
+      #   deferred_probe_timeout=30  - Extends device probe timeout
+      
       GRUB_CMDLINE_LINUX_DEFAULT="quiet clk_ignore_unused pd_ignore_unused audit=0 deferred_probe_timeout=30"
+      EOF
+      
+      # Create 99-qcom.cfg for other GRUB settings
+      cat >/etc/default/grub.d/99-qcom.cfg <<'EOF'
+      # Qualcomm-specific GRUB configuration
+      # This file is sourced by /etc/default/grub
+      
       GRUB_TIMEOUT=5
       GRUB_DISABLE_OS_PROBER=true
+      
       # Enable serial console for debugging
       GRUB_TERMINAL="console serial"
       GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"
+      
+      # Ensure kernel version is shown in menu entries
+      # Empty GRUB_DISTRIBUTOR means GRUB will use "Debian GNU/Linux, with Linux X.X.X"
+      GRUB_DISTRIBUTOR=""
       EOF
       
       # Generate GRUB configuration
