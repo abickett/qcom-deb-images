@@ -316,6 +316,16 @@ actions:
       - kmod
       - linux-base
 
+{{- if hasSuffix ".deb" $kernelpackage }}
+  # Kernel will be installed from local-debs
+  - action: apt
+    description: Install firmware packages (kernel from local-debs)
+    recommends: true
+    packages:
+      - firmware-atheros
+      - firmware-qcom-soc
+{{- else }}
+  # Standard kernel installation from repository
   - action: apt
     description: Install kernel and firmware packages
     recommends: true
@@ -323,6 +333,7 @@ actions:
       - firmware-atheros
       - firmware-qcom-soc
       - {{$kernelpackage}}
+{{- end }}
 
   # this is currently needed on boards such as RB1 which are using Android
   # bootloader to check the boot count of the boot_a/boot_b partitions
@@ -341,10 +352,36 @@ actions:
 
   - action: run
     description: Install local debs from /root/
-    chroot: yes
+    chroot: true 
     command: |
       set -eux
-      apt -y install /root/*.deb
+      kernel_pkg="{{$kernelpackage}}"
+      
+      # Check if we're using a local kernel package
+      if [[ "$kernel_pkg" == *.deb ]]; then
+          echo "Installing specific local kernel: $kernel_pkg"
+          # Install the kernel package first (it may have dependencies)
+          if [[ -f "/root/$kernel_pkg" ]]; then
+              apt -y install "/root/$kernel_pkg"
+          else
+              echo "ERROR: Kernel package not found: /root/$kernel_pkg"
+              ls -la /root/*.deb
+              exit 1
+          fi
+          
+          # Install remaining local debs
+          for deb in /root/*.deb; do
+              deb_name=$(basename "$deb")
+              if [[ "$deb_name" != "$kernel_pkg" ]]; then
+                  echo "Installing: $deb_name"
+                  apt -y install "$deb" || true
+              fi
+          done
+      else
+          echo "Installing all local debs (kernel from repository)"
+          apt -y install /root/*.deb
+      fi
+      
       # no need to keep these
       rm -vf /root/*.deb
 {{- end }}
