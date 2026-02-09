@@ -1,4 +1,5 @@
 {{- $dtb := or .dtb "firmware" }}
+{{- $bootloader := or .bootloader "systemd-boot" }}
 {{- $imagesize := or .imagesize "4.5GiB" }}
 {{- $imagetype := or .imagetype "ufs" }}
 {{- $image := printf "disk-%s.img" $imagetype }}
@@ -60,6 +61,49 @@ actions:
     setup-fstab: true
     append-kernel-cmdline: clk_ignore_unused pd_ignore_unused audit=0 deferred_probe_timeout=30
 
+{{- if eq $bootloader "grub" }}
+  - action: apt
+    description: Install GRUB bootloader packages
+    recommends: true
+    packages:
+      - grub-efi-arm64
+      - grub-efi-arm64-bin
+      - grub2-common
+
+  - action: run
+    description: Install and configure GRUB bootloader
+    chroot: true
+    command: |
+      set -eux
+      
+      # Install GRUB to ESP
+      grub-install --target=arm64-efi --efi-directory=/boot/efi \
+          --bootloader-id=debian --recheck --no-floppy
+      
+      # Configure GRUB defaults
+      cat >>/etc/default/grub <<'EOF'
+      # Qualcomm-specific kernel parameters
+      GRUB_CMDLINE_LINUX_DEFAULT="quiet clk_ignore_unused pd_ignore_unused audit=0 deferred_probe_timeout=30"
+      GRUB_TIMEOUT=5
+      GRUB_DISABLE_OS_PROBER=true
+      # Enable serial console for debugging
+      GRUB_TERMINAL="console serial"
+      GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"
+      EOF
+      
+      # Generate GRUB configuration
+      update-grub
+      
+      # Create fallback bootloader for removable media (USB/SD cards)
+      # UEFI spec requires /EFI/BOOT/BOOTAA64.EFI for removable media
+      mkdir -p /boot/efi/EFI/BOOT
+      cp /boot/efi/EFI/debian/grubaa64.efi /boot/efi/EFI/BOOT/BOOTAA64.EFI
+      
+      echo "GRUB installation complete"
+      echo "GRUB config location: /boot/grub/grub.cfg"
+      echo "EFI bootloader: /boot/efi/EFI/debian/grubaa64.efi"
+      echo "Fallback bootloader: /boot/efi/EFI/BOOT/BOOTAA64.EFI"
+{{- else }}
   - action: apt
     description: Make system bootable with systemd-boot
     recommends: true
@@ -68,6 +112,7 @@ actions:
       # TODO investigate why systemd-boot Recommends: shim-signed which
       # Depends on grub packages
       - shim-signed-
+{{- end }}
 
   # this is to provide an updated copy of DTBs from the OS to U-Boot, notably
   # on RB1
@@ -95,6 +140,63 @@ actions:
           linux-version list | linux-version sort --reverse | head -1)"
       dtb_path="/usr/lib/linux-image-${latest_kernel}"
       cp -RT "$dtb_path" "/boot/efi/dtb"
+
+{{- if eq $bootloader "grub" }}
+  - action: run
+    description: Configure GRUB to load device tree
+    chroot: true
+    command: |
+      set -eux
+      
+      # Only configure DTB support if a specific DTB is requested
+      if [ ! -f /etc/kernel/devicetree ]; then
+          echo "No device tree override specified, GRUB will use firmware DTB"
+          exit 0
+      fi
+      
+      DTB_PATH=$(cat /etc/kernel/devicetree | tr -d '\n')
+      if [ -z "$DTB_PATH" ]; then
+          echo "Empty device tree path, GRUB will use firmware DTB"
+          exit 0
+      fi
+      
+      echo "Configuring GRUB for device tree: $DTB_PATH"
+      
+      # Protect original 10_linux from grub-common updates using dpkg-divert
+      dpkg-divert --add --rename --divert /etc/grub.d/10_linux.orig /etc/grub.d/10_linux
+      
+      # Create wrapper that adds devicetree support
+      # This wrapper extracts kernel version from initrd path and uses DTBs from /usr/lib/linux-image-*
+      cat >/etc/grub.d/10_linux <<'GRUBEOF'
+      #!/bin/sh
+      set -e
+      
+      # Wrapper for 10_linux that adds devicetree support
+      
+      # Check if devicetree is specified
+      if [ ! -f /etc/kernel/devicetree ]; then
+          exec /etc/grub.d/10_linux.orig
+      fi
+      
+      DTB_PATH=$(cat /etc/kernel/devicetree | tr -d '\n')
+      if [ -z "$DTB_PATH" ]; then
+          exec /etc/grub.d/10_linux.orig
+      fi
+      
+      # Run original and add devicetree command after each initrd line
+      # Extract kernel version from initrd path and use it for DTB path in /usr/lib/linux-image-*
+      # Pattern matches lines like: initrd /boot/initrd.img-6.1.0-28-arm64
+      /etc/grub.d/10_linux.orig | sed -E "s|^([[:space:]]*initrd[[:space:]]+.*/initrd\.img-([0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*))|\1\n\tdevicetree /usr/lib/linux-image-\2/${DTB_PATH}|"
+      GRUBEOF
+      
+      chmod +x /etc/grub.d/10_linux
+      
+      # Regenerate GRUB config with DTB support
+      update-grub
+      
+      echo "GRUB configured for device tree support"
+      echo "Device tree: $DTB_PATH"
+{{- end }}
 
   - action: run
     description: Create task to grow root filesystem on first boot
