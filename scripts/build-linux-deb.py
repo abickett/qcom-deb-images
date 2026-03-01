@@ -166,6 +166,11 @@ def main():
         help="Use qcom-next repository and ref defaults",
     )
     parser.add_argument(
+        "--kernel-dir",
+        default="linux",
+        help="Path to kernel source directory (default: linux)",
+    )
+    parser.add_argument(
         "fragments",
         metavar="FRAGMENT",
         type=str,
@@ -203,24 +208,61 @@ def main():
 
     check_dependencies()
 
-    log_i(f"Cloning Linux ({args.repo}:{args.ref})")
-    subprocess.run(
-        [
-            "git",
-            "clone",
-            "--depth=1",
-            "--branch",
-            args.ref,
-            args.repo,
-            "linux",
-        ],
-        check=True,
-    )
+    kernel_dir = Path(args.kernel_dir)
+    
+    # Determine if we should clone or use existing source
+    # If kernel_dir is custom AND repo/ref are still defaults, use existing source
+    use_existing = (args.kernel_dir != "linux" and 
+                    args.repo == GIT_REPO and 
+                    args.ref == GIT_REF)
+    
+    if use_existing:
+        # User provided custom kernel_dir without specifying repo/ref
+        # Assume they want to use existing source
+        if not kernel_dir.exists():
+            fatal(f"Kernel directory does not exist: {args.kernel_dir}")
+        log_i(f"Using existing kernel source at: {args.kernel_dir}")
+    elif kernel_dir.exists():
+        # Directory exists - verify branch if it's the default "linux" dir
+        if args.kernel_dir == "linux":
+            try:
+                result = subprocess.run(
+                    ["git", "-C", str(kernel_dir), "rev-parse", "--abbrev-ref", "HEAD"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    current_branch = result.stdout.strip()
+                    if current_branch != args.ref and current_branch != "HEAD":
+                        fatal(
+                            f"linux/ exists but is on branch '{current_branch}', "
+                            f"expected '{args.ref}'. Run 'make clean' to remove it."
+                        )
+            except Exception:
+                pass
+        log_i(f"Reusing existing directory: {args.kernel_dir}")
+    else:
+        # Directory doesn't exist - clone it
+        log_i(f"Cloning Linux ({args.repo}:{args.ref}) to {args.kernel_dir}")
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth=1",
+                "--branch",
+                args.ref,
+                args.repo,
+                str(kernel_dir),
+            ],
+            check=True,
+        )
 
     log_i(f"Configuring Linux (base config: {BASE_CONFIG})")
     # directory to store local config fragments so they can be picked up by
     # kbuild
-    local_conf_dir = Path("linux/kernel/configs")
+    local_conf_dir = kernel_dir / "kernel/configs"
     local_conf_dir.mkdir(parents=True, exist_ok=True)
 
     config_targets = []
@@ -238,7 +280,7 @@ def main():
                 f_out.write(content)
 
             config_targets.append(f"kernel/configs/{local_frag_name}")
-        elif (Path("linux/arch/arm64/configs") / fragment).exists():
+        elif (kernel_dir / "arch/arm64/configs" / fragment).exists():
             log_i(f"Using config fragment from repo: {fragment}")
             config_targets.append(f"arch/arm64/configs/{fragment}")
         else:
@@ -257,7 +299,7 @@ def main():
     ]
 
     # Create base defconfig first
-    subprocess.run(make_base_command + [BASE_CONFIG], check=True, cwd="linux")
+    subprocess.run(make_base_command + [BASE_CONFIG], check=True, cwd=str(kernel_dir))
 
     # Merge config fragments using merge_config.sh for proper dependency
     # handling
@@ -269,7 +311,7 @@ def main():
         subprocess.run(
             merge_command,
             check=True,
-            cwd="linux",
+            cwd=str(kernel_dir),
             env={"ARCH": "arm64", **subprocess.os.environ}
         )
 
@@ -277,12 +319,12 @@ def main():
         subprocess.run(
             make_base_command + ["olddefconfig"],
             check=True,
-            cwd="linux"
+            cwd=str(kernel_dir)
         )
 
     log_i("Building Linux deb")
     build_command = make_base_command + [DEB_PKG_SET]
-    subprocess.run(build_command, check=True, cwd="linux")
+    subprocess.run(build_command, check=True, cwd=str(kernel_dir))
 
 
 if __name__ == "__main__":
