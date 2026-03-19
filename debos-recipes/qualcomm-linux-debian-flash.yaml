@@ -41,6 +41,7 @@ actions:
         "filename" "glymur-crd_cdt.zip"
         "sha256sum" "d694eedb0addcc5ee588d6993661cd23996fba1d1a43afc3b196dad12534bffc"
     )
+    "cdt_filename" "CRD/cdt_glymur_crd_0.1.0.bin"
     "dtb" "qcom/glymur-crd.dtb"
 )}}
 {{- end }}
@@ -497,9 +498,12 @@ actions:
           # extract board device tree from the root filesystem provided
           # tarball
           tar -C build -xvf "${ARTIFACTDIR}/dtbs.tar.gz" "{{ $board.dtb }}"
-          # copy into the FAT as combined-dtb.dtb
-          mcopy -vmp -i "${dtb_bin}" "build/{{ $board.dtb }}" \
-              ::/combined-dtb.dtb
+          # copy into the FAT image via loop mount (avoids mtools dependency)
+          mkdir -p /tmp/dtb_mount
+          mount -o loop "${dtb_bin}" /tmp/dtb_mount
+          cp -v "build/{{ $board.dtb }}" /tmp/dtb_mount/combined-dtb.dtb
+          umount /tmp/dtb_mount
+          rmdir /tmp/dtb_mount
       fi
 {{- end }}
 {{- end }}
