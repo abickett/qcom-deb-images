@@ -49,6 +49,10 @@ endif
 http_proxy ?= $(shell apt-config dump --format '%v%n' Acquire::http::Proxy)
 export http_proxy
 
+# Optional: restrict flash to specific boards (comma-separated)
+# e.g.: make flash TARGET_BOARDS=glymur-crd
+TARGET_BOARDS ?=
+
 .PHONY: all
 all: disk-ufs.img disk-sdcard.img
 
@@ -60,6 +64,10 @@ disk-ufs.img: debos-recipes/qualcomm-linux-debian-image.yaml rootfs.tar
 
 disk-sdcard.img: debos-recipes/qualcomm-linux-debian-image.yaml rootfs.tar
 	$(DEBOS_CMD) -t imagetype:sdcard $<
+
+.PHONY: flash
+flash: debos-recipes/qualcomm-linux-debian-flash.yaml
+	$(DEBOS_CMD) $(if $(TARGET_BOARDS),-t target_boards:$(TARGET_BOARDS)) $<
 
 .PHONY: test
 test: disk-ufs.img
