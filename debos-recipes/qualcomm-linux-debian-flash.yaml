@@ -26,7 +26,7 @@ actions:
 {{- $boards = append $boards (dict
     "name" "glymur-crd"
     "silicon_family" "glymur"
-    "ptool_platforms" (list "glymur-crd/nvme")
+    "ptool_platforms" (list "glymur-crd/nvme" "glymur-crd/spinor")
     "boot_binaries_download" (dict
         "description" "Glymur boot binaries"
         "url" "https://softwarecenter.qualcomm.com/nexus/generic/software/chip/qualcomm_linux-spf-0-0/qualcomm-linux-spf-0-0_test_device_public/r0.0_00009.0/glymur-le-0-0/common/build/bin/Glymur_bootbinaries.zip"
@@ -372,6 +372,11 @@ actions:
                       esp="../disk-ufs.img1"
                       rootfs="../disk-ufs.img2"
                       ;;
+                    "spinor")
+                      # spinor carries firmware only; no OS efi/rootfs partitions
+                      esp=""
+                      rootfs=""
+                      ;;
                     *)
                       echo "unsupported disk type $disk_type"
                       exit 1
@@ -440,8 +445,9 @@ actions:
           # there are wipe_rawprogram*.xml files still
           rm -v "${flash_dir}"/rawprogram*_BLANK_GPT.xml
           rm -v "${flash_dir}"/rawprogram*_WIPE_PARTITIONS.xml
-          # copy silicon family boot binaries; these shouldn't ship partition
-          # files, but make sure not to accidentally clobber any such file
+          # copy silicon family boot binaries (skipped for nvme: firmware
+          # lives on spinor for glymur-class boards)
+          if [ "${disk_type}" != "nvme" ]; then
           find build/{{ $board.name }}_boot-binaries \
               -not -name 'gpt_*' \
               -not -name 'patch*.xml' \
@@ -457,8 +463,16 @@ actions:
                   -or -name '*.elf' \
                   -or -name '*.fv' \
                   -or -name '*.mbn' \
+                  -or -name '*.melf' \
               \) \
               -exec cp --preserve=mode,timestamps -v '{}' "${flash_dir}" \;
+          else
+          # for nvme, copy only programmer files (*.melf) needed by QDL
+          # to establish communication with the device before flashing
+          find build/{{ $board.name }}_boot-binaries \
+              -name '*.melf' \
+              -exec cp --preserve=mode,timestamps -v '{}' "${flash_dir}" \;
+          fi
 
           # remove the temporary disk_type file from the flash dir
           rm -f "${flash_dir}/disk_type"
@@ -474,7 +488,7 @@ actions:
   {{- end }}
 
   {{- if $board.cdt_download }}
-      if [ "${skip_board}" = false ]; then
+      if [ "${skip_board}" = false ] && [ "${disk_type}" != "nvme" ]; then
           # copy just the CDT data; no partition or flashing files
           cp --preserve=mode,timestamps -v \
               build/{{ $board.name }}_cdt/{{ $board.cdt_filename }} \
@@ -482,7 +496,7 @@ actions:
       fi
   {{- end }}
 
-      if [ "${skip_board}" = false ]; then
+      if [ "${skip_board}" = false ] && [ "${disk_type}" != "nvme" ]; then
           # generate a dtb.bin FAT partition with just a single dtb for the
           # current board; long-term this should really be a set of dtbs and
           # overlays as to share dtb.bin across boards
